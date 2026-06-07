@@ -4,7 +4,8 @@
 // fail the whole profile.
 import { blizzard } from "./blizzard.js";
 
-const slug = (s) => String(s).toLowerCase().trim().replace(/['’]/g, "").replace(/\s+/g, "-");
+const slug = (s) =>
+  String(s).toLowerCase().trim().replace(/['’]/g, "").replace(/\s+/g, "-");
 
 export async function buildCharacterProfile({ region = "eu", realm, name }) {
   const r = slug(realm);
@@ -22,61 +23,105 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
     out.faction = p.faction?.type?.toLowerCase?.();
     out.ilvl = p.equipped_item_level ?? p.average_item_level;
     out.title = p.active_title?.display_string ?? p.active_title?.name;
-    out.guild = p.guild ? { name: p.guild.name, realm: p.guild.realm?.slug } : null;
+    out.guild = p.guild
+      ? { name: p.guild.name, realm: p.guild.realm?.slug }
+      : null;
     out.achievementPoints = p.achievement_points;
     out.realmName = p.realm?.name;
-  } catch { out.error = "profile_unavailable"; }
+    out.lastLogin = p.last_login_timestamp ?? null;
+  } catch {
+    out.error = "profile_unavailable";
+  }
 
   // Equipment (with item icons resolved in parallel, best-effort)
   try {
     const eq = await blizzard.getCharacterEquipment({ region, realm: r, name });
     const items = eq.equipped_items ?? [];
-    out.equipment = await Promise.all(items.map(async (it) => {
-      let icon = null;
-      try {
-        const itemId = it.item?.id;
-        if (itemId) {
-          const media = await blizzard.getItemMedia({ region, itemId });
-          icon = (media.assets ?? []).find((a) => a.key === "icon")?.value ?? null;
+    out.equipment = await Promise.all(
+      items.map(async (it) => {
+        let icon = null;
+        try {
+          const itemId = it.item?.id;
+          if (itemId) {
+            const media = await blizzard.getItemMedia({ region, itemId });
+            icon =
+              (media.assets ?? []).find((a) => a.key === "icon")?.value ?? null;
+          }
+        } catch {
+          /* icon optional */
         }
-      } catch { /* icon optional */ }
-      return {
-        slot: it.slot?.type,
-        name: it.name,
-        ilvl: it.level?.value,
-        quality: it.quality?.type,
-        icon,
-        enchant: (it.enchantments ?? []).map((e) => e.display_string).filter(Boolean),
-      };
-    }));
-  } catch { out.equipment = []; }
+        return {
+          slot: it.slot?.type,
+          name: it.name,
+          ilvl: it.level?.value,
+          quality: it.quality?.type,
+          icon,
+          enchant: (it.enchantments ?? [])
+            .map((e) => e.display_string)
+            .filter(Boolean),
+        };
+      }),
+    );
+  } catch {
+    out.equipment = [];
+  }
 
   // Character render (the posed 3D image) + avatar
   try {
     const media = await blizzard.getCharacterMedia({ region, realm: r, name });
     const assets = media.assets ?? [];
-    out.render = assets.find((a) => a.key === "main-raw")?.value
-      ?? assets.find((a) => a.key === "main")?.value ?? null;
+    out.render =
+      assets.find((a) => a.key === "main-raw")?.value ??
+      assets.find((a) => a.key === "main")?.value ??
+      null;
     out.avatar = assets.find((a) => a.key === "avatar")?.value ?? null;
     out.inset = assets.find((a) => a.key === "inset")?.value ?? null;
-  } catch { /* render optional */ }
+  } catch {
+    /* render optional */
+  }
 
   // Mythic+ — Blizzard's own keystone profile (current season).
   try {
-    const mk = await blizzard.getMythicKeystoneProfile({ region, realm: r, name });
+    const mk = await blizzard.getMythicKeystoneProfile({
+      region,
+      realm: r,
+      name,
+    });
     const current = mk.current_period?.best_runs ?? [];
     out.mythicPlus = {
       currentRating: mk.current_mythic_rating?.rating ?? null, // Blizzard's in-game M+ rating (not io)
+      ratingColor: mk.current_mythic_rating?.color
+        ? `rgb(${mk.current_mythic_rating.color.r},${mk.current_mythic_rating.color.g},${mk.current_mythic_rating.color.b})`
+        : null,
       bestRuns: (current.length ? current : (mk.seasons?.[0]?.best_runs ?? []))
         .slice(0, 10)
         .map((run) => ({
           dungeon: run.dungeon?.name,
           level: run.keystone_level,
-          duration: run.duration,
+          duration: run.duration, // ms
           completed: run.is_completed_within_time,
+          completedAt: run.completed_timestamp,
+          affixes: (run.keystone_affixes ?? [])
+            .map((a) => a.name)
+            .filter(Boolean),
+          score: run.mythic_rating?.rating ?? run.map_rating?.rating ?? null,
         })),
     };
-  } catch { out.mythicPlus = { currentRating: null, bestRuns: [] }; }
+    // per-dungeon best rating across the season (if provided)
+    out.mythicPlus.perDungeon = (
+      mk.current_mythic_rating?.map_ratings ??
+      mk.seasons?.[0]?.mythic_rating?.map_ratings ??
+      []
+    )
+      .map((d) => ({
+        dungeon: d.dungeon?.name,
+        rating: d.rating,
+        color: d.color,
+      }))
+      .filter((d) => d.dungeon);
+  } catch {
+    out.mythicPlus = { currentRating: null, bestRuns: [] };
+  }
 
   // Raid progress — encounters/raids gives kills per boss/difficulty.
   try {
@@ -89,13 +134,26 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
         difficulty: m.difficulty?.name,
         completed: m.progress?.completed_count,
         total: m.progress?.total_count,
+        // per-boss detail: which bosses killed, and how many times / last kill
+        bosses: (m.progress?.encounters ?? []).map((e) => ({
+          name: e.encounter?.name,
+          kills: e.completed_count,
+          lastKill: e.last_kill_timestamp,
+          killed: (e.completed_count ?? 0) > 0,
+        })),
       })),
     }));
-  } catch { out.raids = []; }
+  } catch {
+    out.raids = [];
+  }
 
   // Achievements — full list (this is a large payload; best-effort).
   try {
-    const ac = await blizzard.getAchievementsSummary({ region, realm: r, name });
+    const ac = await blizzard.getAchievementsSummary({
+      region,
+      realm: r,
+      name,
+    });
     out.achievementPoints = ac.total_points ?? out.achievementPoints;
     out.achievementsList = (ac.achievements ?? [])
       .filter((a) => a.completed_timestamp) // only earned
@@ -106,55 +164,94 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
       }))
       .sort((x, y) => (y.completedAt ?? 0) - (x.completedAt ?? 0)); // newest first
     out.achievementCount = out.achievementsList.length;
-  } catch { out.achievementsList = []; }
+  } catch {
+    out.achievementsList = [];
+  }
 
   // Statistics (the character-sheet stats)
   try {
-    const st = await blizzard.getCharacterStatistics({ region, realm: r, name });
+    const st = await blizzard.getCharacterStatistics({
+      region,
+      realm: r,
+      name,
+    });
     out.stats = {
-      health: st.health, power: st.power, powerType: st.power_type?.name,
-      strength: st.strength?.effective, agility: st.agility?.effective,
-      intellect: st.intellect?.effective, stamina: st.stamina?.effective,
+      health: st.health,
+      power: st.power,
+      powerType: st.power_type?.name,
+      strength: st.strength?.effective,
+      agility: st.agility?.effective,
+      intellect: st.intellect?.effective,
+      stamina: st.stamina?.effective,
       crit: st.melee_crit?.value ?? st.spell_crit?.value,
       haste: st.melee_haste?.value ?? st.spell_haste?.value,
-      mastery: st.mastery?.value, versatility: st.versatility_damage_done_bonus,
+      mastery: st.mastery?.value,
+      versatility: st.versatility_damage_done_bonus,
     };
-  } catch { out.stats = null; }
+  } catch {
+    out.stats = null;
+  }
 
   // Specialization / talent loadout name
   try {
-    const sp = await blizzard.getCharacterSpecializations({ region, realm: r, name });
+    const sp = await blizzard.getCharacterSpecializations({
+      region,
+      realm: r,
+      name,
+    });
     out.activeSpec = sp.active_specialization?.name;
-    const loadout = (sp.specializations ?? []).find((x) => x.specialization?.name === out.activeSpec);
-    out.talentLoadout = loadout?.loadouts?.find((l) => l.is_active)?.talent_loadout_code ?? null;
-  } catch { /* optional */ }
+    const loadout = (sp.specializations ?? []).find(
+      (x) => x.specialization?.name === out.activeSpec,
+    );
+    out.talentLoadout =
+      loadout?.loadouts?.find((l) => l.is_active)?.talent_loadout_code ?? null;
+  } catch {
+    /* optional */
+  }
 
   // PvP ratings (2v2, 3v3, RBG)
   try {
     const brackets = ["2v2", "3v3", "rbg"];
-    const results = await Promise.all(brackets.map((b) =>
-      blizzard.getPvpBracket({ region, realm: r, name, bracket: b }).then((d) => ({ b, rating: d.rating })).catch(() => null)
-    ));
+    const results = await Promise.all(
+      brackets.map((b) =>
+        blizzard
+          .getPvpBracket({ region, realm: r, name, bracket: b })
+          .then((d) => ({ b, rating: d.rating }))
+          .catch(() => null),
+      ),
+    );
     const pvp = {};
-    results.forEach((x) => { if (x && x.rating) pvp[x.b] = x.rating; });
+    results.forEach((x) => {
+      if (x && x.rating) pvp[x.b] = x.rating;
+    });
     out.pvp = Object.keys(pvp).length ? pvp : null;
-  } catch { out.pvp = null; }
+  } catch {
+    out.pvp = null;
+  }
 
   // Professions
   try {
-    const pr = await blizzard.getCharacterProfessions({ region, realm: r, name });
+    const pr = await blizzard.getCharacterProfessions({
+      region,
+      realm: r,
+      name,
+    });
     out.professions = (pr.primaries ?? []).map((p) => ({
       name: p.profession?.name,
       tier: (p.tiers ?? [])[0]?.tier?.name,
       skill: (p.tiers ?? [])[0]?.skill_points,
       max: (p.tiers ?? [])[0]?.max_skill_points,
     }));
-  } catch { out.professions = []; }
+  } catch {
+    out.professions = [];
+  }
 
   // Collections — mounts / pets / toys (counts; lists best-effort)
   try {
     const [m, pe, to] = await Promise.all([
-      blizzard.getCollectionsMounts({ region, realm: r, name }).catch(() => null),
+      blizzard
+        .getCollectionsMounts({ region, realm: r, name })
+        .catch(() => null),
       blizzard.getCollectionsPets({ region, realm: r, name }).catch(() => null),
       blizzard.getCollectionsToys({ region, realm: r, name }).catch(() => null),
     ]);
@@ -163,36 +260,57 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
       pets: pe?.pets?.length ?? 0,
       toys: to?.toys?.length ?? 0,
     };
-  } catch { out.collections = null; }
+  } catch {
+    out.collections = null;
+  }
 
   // Titles — all earned + active
   try {
     const ti = await blizzard.getCharacterTitles({ region, realm: r, name });
     out.activeTitle = ti.active_title?.name ?? out.title;
     out.titles = (ti.titles ?? []).map((x) => x.name).filter(Boolean);
-  } catch { out.titles = []; }
+  } catch {
+    out.titles = [];
+  }
 
   // Appearance — basic visual info (race/face/items rendered set)
   try {
-    const ap = await blizzard.getCharacterAppearance({ region, realm: r, name });
+    const ap = await blizzard.getCharacterAppearance({
+      region,
+      realm: r,
+      name,
+    });
     out.appearance = {
       faceVariation: ap.face_variation,
       skinColor: ap.skin_color,
       hairColor: ap.hair_color,
-      items: (ap.items ?? []).map((it) => ({ slot: it.slot?.type, id: it.item_appearance_modifier_id })),
+      items: (ap.items ?? []).map((it) => ({
+        slot: it.slot?.type,
+        id: it.item_appearance_modifier_id,
+      })),
     };
-  } catch { out.appearance = null; }
+  } catch {
+    out.appearance = null;
+  }
 
   // Reputations — standing with each faction (best-effort, can be large)
   try {
-    const rep = await blizzard.getCharacterReputations({ region, realm: r, name });
-    out.reputations = (rep.reputations ?? []).map((x) => ({
-      faction: x.faction?.name,
-      standing: x.standing?.tier?.name ?? x.standing?.name,
-      value: x.standing?.value,
-      max: x.standing?.max,
-    })).filter((x) => x.faction);
-  } catch { out.reputations = []; }
+    const rep = await blizzard.getCharacterReputations({
+      region,
+      realm: r,
+      name,
+    });
+    out.reputations = (rep.reputations ?? [])
+      .map((x) => ({
+        faction: x.faction?.name,
+        standing: x.standing?.tier?.name ?? x.standing?.name,
+        value: x.standing?.value,
+        max: x.standing?.max,
+      }))
+      .filter((x) => x.faction);
+  } catch {
+    out.reputations = [];
+  }
 
   return out;
 }

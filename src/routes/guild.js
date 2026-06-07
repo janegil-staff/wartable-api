@@ -22,11 +22,13 @@ router.get("/:region/:realm/:name", async (req, res, next) => {
 
     try {
       const r = await blizzard.getGuildRoster({ region, realm, name });
-      out.roster = (r.members ?? [])
+out.roster = (r.members ?? [])
         .map((m) => ({
           name: m.character?.name,
           level: m.character?.level,
-          class: m.character?.playable_class?.name,
+          // class/race may come back as a name or only an id depending on locale
+          class: m.character?.playable_class?.name
+            ?? (typeof m.character?.playable_class === "object" ? null : m.character?.playable_class),
           race: m.character?.playable_race?.name,
           rank: m.rank, // 0 = GM
         }))
