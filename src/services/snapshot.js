@@ -178,16 +178,27 @@ export async function getCalendar({ region = "eu", realm, name, from, to }) {
   };
 }
 
-// Pull dated events (M+ runs, achievements) out of stored profiles in range.
+// ── REPLACEMENT for buildCharEvents() in src/services/snapshot.js ───────────
+// Emits dated events for M+ runs, raid boss kills, and achievements, matching
+// the exact shapes that services/characterProfile.js produces:
+//   mythicPlus.bestRuns[]              → { level, dungeon, completedAt }
+//   raids[].modes[].bosses[]           → { name, lastKill, killed }   (+ mode.difficulty)
+//   achievementsList[]                 → { name, completedAt }
+// completed_timestamp / last_kill_timestamp are epoch MILLISECONDS from Blizzard.
+
+function toMs(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const p = Date.parse(v);
+  return Number.isNaN(p) ? null : p;
+}
+
 async function buildCharEvents({ region, realmSlug, name, from, to }) {
   const fromMs = new Date(from + "T00:00:00Z").getTime();
-  const toMs = new Date(to + "T23:59:59Z").getTime();
-  // use the latest snapshot in range as the source of timestamps
+  const toMs2 = new Date(to + "T23:59:59Z").getTime();
+
   const latest = await Snapshot.findOne({
-    region,
-    realmSlug,
-    name,
-    date: { $gte: from, $lte: to },
+    region, realmSlug, name, date: { $gte: from, $lte: to },
   })
     .sort({ date: -1 })
     .select("profile")
@@ -197,27 +208,51 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
   if (!p) return [];
 
   const events = [];
+  const inRange = (ms) => ms != null && ms >= fromMs && ms <= toMs2;
 
+  // ── Mythic+ runs ── (profile: mythicPlus.bestRuns[] with completedAt)
   (p.mythicPlus?.bestRuns ?? []).forEach((run) => {
-    const ts = run.completedAt;
-    if (ts && ts >= fromMs && ts <= toMs) {
-      events.push({
-        date: dayKey(new Date(ts)),
-        kind: "mplusRun",
-        label: `+${run.level} ${run.dungeon ?? ""}`.trim(),
-      });
-    }
+    const ms = toMs(run.completedAt);
+    if (!inRange(ms)) return;
+    events.push({
+      date: dayKey(new Date(ms)),
+      kind: "mplusRun",
+      label: `+${run.level ?? "?"} ${run.dungeon ?? ""}`.trim(),
+    });
   });
 
-  (p.achievementsList ?? []).forEach((a) => {
-    const ts = a.completedAt;
-    if (ts && ts >= fromMs && ts <= toMs) {
-      events.push({
-        date: dayKey(new Date(ts)),
-        kind: "achievement",
-        label: a.name ?? "Achievement",
+  // ── Raid boss kills ── (profile: raids[].modes[].bosses[] with lastKill)
+  // Dedupe identical boss+difficulty+day (a boss can appear across modes).
+  const seenRaid = new Set();
+  (p.raids ?? []).forEach((inst) => {
+    (inst.modes ?? []).forEach((mode) => {
+      const diff = mode.difficulty ?? "";
+      (mode.bosses ?? []).forEach((b) => {
+        if (!b.killed) return;
+        const ms = toMs(b.lastKill);
+        if (!inRange(ms)) return;
+        const day = dayKey(new Date(ms));
+        const key = `${b.name}|${diff}|${day}`;
+        if (seenRaid.has(key)) return;
+        seenRaid.add(key);
+        events.push({
+          date: day,
+          kind: "raidKill",
+          label: diff ? `${b.name ?? "Boss"} (${diff})` : (b.name ?? "Boss"),
+        });
       });
-    }
+    });
+  });
+
+  // ── Achievements ── (profile: achievementsList[] with completedAt)
+  (p.achievementsList ?? []).forEach((a) => {
+    const ms = toMs(a.completedAt);
+    if (!inRange(ms)) return;
+    events.push({
+      date: dayKey(new Date(ms)),
+      kind: "achievement",
+      label: a.name ?? "Achievement",
+    });
   });
 
   return events;
