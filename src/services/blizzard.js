@@ -139,7 +139,65 @@ async function getAchievements({ region = "eu", realm, name }) {
   return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/achievements`, { namespace: "profile" });
 }
 
+
+// __RESTORED_DATA_FNS_V1__
+async function getCharacterMedia({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/character-media`, { namespace: "profile" });
+}
+async function getItemMedia({ region = "eu", itemId }) {
+  return apiGet(region, `/data/wow/media/item/${itemId}`, { namespace: "static" });
+}
+async function getCharacterStatistics({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/statistics`, { namespace: "profile" });
+}
+async function getCharacterSpecializations({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/specializations`, { namespace: "profile" });
+}
+async function getCharacterProfessions({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/professions`, { namespace: "profile" });
+}
+async function getCharacterReputations({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/reputations`, { namespace: "profile" });
+}
+async function getCharacterTitles({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/titles`, { namespace: "profile" });
+}
+async function getCharacterAppearance({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/appearance`, { namespace: "profile" });
+}
+async function getCollectionsMounts({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/collections/mounts`, { namespace: "profile" });
+}
+async function getCollectionsPets({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/collections/pets`, { namespace: "profile" });
+}
+async function getCollectionsToys({ region = "eu", realm, name }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/collections/toys`, { namespace: "profile" });
+}
+async function getPvpBracket({ region = "eu", realm, name, bracket }) {
+  return apiGet(region, `/profile/wow/character/${slug(realm)}/${charName(name)}/pvp-bracket/${bracket}`, { namespace: "profile" });
+}
+
+
+// __RESTORED_GUILD_ACTIVITY_V1__
+async function getGuildActivity({ region = "eu", realm, name }) {
+  return apiGet(region, `/data/wow/guild/${slug(realm)}/${slug(name)}/activity`, { namespace: "profile" });
+}
+
 export const blizzard = {
+  getGuildActivity,
+  getCharacterMedia,
+  getItemMedia,
+  getCharacterStatistics,
+  getCharacterSpecializations,
+  getCharacterProfessions,
+  getCharacterReputations,
+  getCharacterTitles,
+  getCharacterAppearance,
+  getCollectionsMounts,
+  getCollectionsPets,
+  getCollectionsToys,
+  getPvpBracket,
   REGIONS,
   getAppToken,
   apiGet,

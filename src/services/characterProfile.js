@@ -263,7 +263,7 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
 
   // Raid progress — encounters/raids gives kills per boss/difficulty.
   try {
-    const raids = await blizzard.getRaidEncounters({ region, realm: r, name });
+    const raids = await blizzard.getEncountersRaids({ region, realm: r, name });
     const expansions = raids.expansions ?? [];
     const latest = expansions[expansions.length - 1];
     out.raids = (latest?.instances ?? []).map((inst) => ({
@@ -287,7 +287,7 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
 
   // Achievements — full list (this is a large payload; best-effort).
   try {
-    const ac = await blizzard.getAchievementsSummary({
+    const ac = await blizzard.getAchievements({
       region,
       realm: r,
       name,
