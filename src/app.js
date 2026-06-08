@@ -10,6 +10,8 @@ import thisWeekRoutes from "./routes/thisweek.js";
 import auctionRoutes from "./routes/auctions.js";
 import leaderboardRoutes from "./routes/leaderboards.js";
 import shareRoutes from "./routes/share.js";
+import calendarRoutes from "./routes/calendar.js";
+import progressRoutes from "./routes/progress.js";
 
 const app = express();
 app.use(cors({ origin: env.CORS_ORIGIN }));
@@ -25,6 +27,8 @@ app.use("/thisweek", thisWeekRoutes);
 app.use("/auctions", auctionRoutes);
 app.use("/leaderboards", leaderboardRoutes);
 app.use("/share", shareRoutes);
+app.use("/calendar", calendarRoutes);
+app.use("/progress", progressRoutes);
 
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 // eslint-disable-next-line no-unused-vars
