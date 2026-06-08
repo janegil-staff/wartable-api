@@ -7,6 +7,97 @@ import { blizzard } from "./blizzard.js";
 const slug = (s) =>
   String(s).toLowerCase().trim().replace(/['’]/g, "").replace(/\s+/g, "-");
 
+// Primary stat type names (so we can flag them isPrimary for the modal's top block).
+const PRIMARY_STATS = new Set([
+  "STRENGTH",
+  "AGILITY",
+  "INTELLECT",
+  "STAMINA",
+]);
+
+// Build the rich stat list the modal expects: { name, value, display, isPrimary }.
+// Blizzard splits armor/weapon out of `stats`, so we fold those in as primaries.
+function buildItemStats(it) {
+  const out = [];
+
+  // Armor (its own top-level field on armor pieces)
+  if (it.armor && it.armor.value != null) {
+    out.push({
+      name: "Armor",
+      value: it.armor.value,
+      display: it.armor.display?.display_string || `${it.armor.value} Armor`,
+      isPrimary: true,
+    });
+  }
+
+  // Weapon damage + dps + speed (its own top-level object on weapons)
+  if (it.weapon) {
+    const w = it.weapon;
+    if (w.damage && w.damage.display_string) {
+      out.push({
+        name: "Damage",
+        value: w.damage.min_value,
+        display: w.damage.display_string,
+        isPrimary: true,
+      });
+    }
+    if (w.attack_speed && w.attack_speed.display_string) {
+      out.push({
+        name: "Speed",
+        value: w.attack_speed.value,
+        display: w.attack_speed.display_string,
+        isPrimary: true,
+      });
+    }
+    if (w.dps && w.dps.display_string) {
+      out.push({
+        name: "DPS",
+        value: w.dps.value,
+        display: w.dps.display_string,
+        isPrimary: true,
+      });
+    }
+  }
+
+  // Regular stat lines (primary stats + secondaries like crit/haste/mastery/vers)
+  (it.stats ?? []).forEach((s) => {
+    const typeName = s.type?.type; // e.g. "STRENGTH", "CRIT_RATING"
+    out.push({
+      name: s.type?.name || typeName || "",
+      value: s.value,
+      display:
+        s.display?.display_string ||
+        (s.value != null ? `+${s.value} ${s.type?.name ?? ""}`.trim() : ""),
+      isPrimary: typeName ? PRIMARY_STATS.has(typeName) : false,
+    });
+  });
+
+  return out;
+}
+
+// Equip/Use effects (procs, on-use, set-style spell text)
+function buildItemEffects(it) {
+  return (it.spells ?? [])
+    .map((sp) => ({
+      name: sp.spell?.name || "",
+      description:
+        sp.description ||
+        (sp.display_string ? sp.display_string : "") ||
+        sp.spell?.name ||
+        "",
+    }))
+    .filter((e) => e.description);
+}
+
+// Sockets / gems -> { item, type, display }
+function buildItemSockets(it) {
+  return (it.sockets ?? []).map((sk) => ({
+    item: sk.item?.name || null,
+    type: sk.socket_type?.name || sk.socket_type?.type || null,
+    display: sk.display_string || null,
+  }));
+}
+
 export async function buildCharacterProfile({ region = "eu", realm, name }) {
   const r = slug(realm);
   const out = { region, realm: r, name, builtAt: new Date().toISOString() };
@@ -33,7 +124,7 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
     out.error = "profile_unavailable";
   }
 
-  // Equipment (with item icons resolved in parallel, best-effort)
+  // Equipment (full per-item detail + item icons resolved in parallel, best-effort)
   try {
     const eq = await blizzard.getCharacterEquipment({ region, realm: r, name });
     const items = eq.equipped_items ?? [];
@@ -52,13 +143,60 @@ export async function buildCharacterProfile({ region = "eu", realm, name }) {
         }
         return {
           slot: it.slot?.type,
+          slotName: it.slot?.name,
           name: it.name,
           ilvl: it.level?.value,
+          ilvlDisplay: it.level?.display_string || null,
           quality: it.quality?.type,
+          qualityName: it.quality?.name || null,
           icon,
+          itemType:
+            it.inventory_type?.name ||
+            it.item_subclass?.name ||
+            null,
+          itemSubclass: it.item_subclass?.name || null,
+          binding: it.binding?.name || null,
+          stats: buildItemStats(it),
+          sockets: buildItemSockets(it),
           enchant: (it.enchantments ?? [])
             .map((e) => e.display_string)
             .filter(Boolean),
+          effects: buildItemEffects(it),
+          // transmog appearance (the "Transmogrified to:" line)
+          transmog:
+            it.transmog?.item?.name ||
+            it.transmog?.display_string ||
+            null,
+          // upgrade track, e.g. "Upgrade Level: Hero 3/6"
+          upgrade:
+            it.level?.display_string &&
+            /\d+\/\d+/.test(it.level.display_string)
+              ? it.level.display_string
+              : it.name_description?.display_string || null,
+          durability: it.durability?.display_string || null,
+          sellPrice: it.sell_price?.display_strings?.header || null,
+          requirement:
+            it.requirements?.level?.display_string ||
+            it.requirements?.playable_classes?.display_string ||
+            null,
+          // set name + which pieces equipped + active/inactive set bonuses
+          set: it.set
+            ? {
+                name:
+                  it.set.item_set?.name ||
+                  it.set.display_string ||
+                  null,
+                items: (it.set.items ?? []).map((si) => ({
+                  name: si.item?.name || null,
+                  equipped: si.is_equipped === true,
+                })),
+                effects: (it.set.effects ?? []).map((ef) => ({
+                  text: ef.display_string || null,
+                  active: ef.is_active === true,
+                })),
+                displayCount: it.set.display_string || null,
+              }
+            : null,
         };
       }),
     );
