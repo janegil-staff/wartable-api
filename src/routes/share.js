@@ -3,11 +3,14 @@ import { Router } from "express";
 import { ShareCode } from "../models/ShareCode.js";
 import { generateShareCode, normalizeCode } from "../utils/shareCode.js";
 import { buildCharacterProfile } from "../services/characterProfile.js";
+import { getCalendar, recordSnapshot } from "../services/snapshot.js";
 import { requireAuth } from "../middleware/auth.js";
-
 const router = Router();
 const CACHE_MS = 3 * 60 * 60 * 1000;
 const isStale = (at) => !at || Date.now() - new Date(at).getTime() > CACHE_MS;
+
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 // POST /share  (auth) — make a code for a character. body: { region, realmSlug, name, label? }
 router.post("/", requireAuth, async (req, res, next) => {
@@ -30,6 +33,8 @@ router.post("/", requireAuth, async (req, res, next) => {
 });
 
 // GET /share/:code — public view, refreshes snapshot when stale.
+// Bundles the character profile PLUS the current month's calendar
+// (progress.snapshots + schedule) so the web dashboard can render the calendar.
 router.get("/:code", async (req, res, next) => {
   try {
     const code = normalizeCode(req.params.code);
@@ -42,10 +47,47 @@ router.get("/:code", async (req, res, next) => {
         region: doc.character.region, realm: doc.character.realmSlug, name: doc.character.name,
       });
       doc.snapshotAt = new Date();
+      // also record a daily snapshot so the calendar fills for shared chars too
+      recordSnapshot({
+        region: doc.character.region,
+        realm: doc.character.realmSlug,
+        name: doc.character.name,
+      }).catch(() => {});
     }
     doc.viewCount += 1;
     await doc.save();
-    res.json({ label: doc.label ?? null, character: doc.snapshot, updatedAt: doc.snapshotAt });
+
+    // current month range for the calendar
+    const now = new Date();
+    const from = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+    const to = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+
+    let progress = { snapshots: [] };
+    let schedule = { resets: [], affixes: [] };
+    let charEvents = [];
+    try {
+      const cal = await getCalendar({
+        region: doc.character.region,
+        realm: doc.character.realmSlug,
+        name: doc.character.name,
+        from,
+        to,
+      });
+      progress = cal.progress;
+      schedule = cal.schedule;
+      charEvents = cal.charEvents;
+    } catch {
+      /* calendar best-effort; profile still returns */
+    }
+
+    res.json({
+      label: doc.label ?? null,
+      character: doc.snapshot,
+      progress,
+      schedule,
+      charEvents,
+      updatedAt: doc.snapshotAt,
+    });
   } catch (e) { next(e); }
 });
 
