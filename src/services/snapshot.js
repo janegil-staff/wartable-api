@@ -12,6 +12,9 @@ import { buildCharacterProfile } from "./characterProfile.js";
 const slug = (s) =>
   String(s).toLowerCase().trim().replace(/['’]/g, "").replace(/\s+/g, "-");
 
+// character names are stored/queried lowercased so URL case never matters
+const lname = (s) => String(s ?? "").toLowerCase().trim();
+
 export function dayKey(d = new Date()) {
   return d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 }
@@ -34,11 +37,12 @@ function loginTs(profile) {
 
 // Build + upsert today's snapshot for one character. Derives `played` by
 // comparing the login timestamp to the most recent earlier snapshot.
-export async function recordSnapshot({ region = "eu", realm, name }) {
+export async function recordSnapshot({ region = "eu", realm, name, profile: prebuilt } = {}) {
   const realmSlug = slug(realm);
+  const nm = lname(name);
   const date = dayKey();
 
-  const profile = await buildCharacterProfile({ region, realm: realmSlug, name });
+  const profile = prebuilt ?? await buildCharacterProfile({ region, realm: realmSlug, name });
   if (profile?.error) {
     return { written: false, reason: profile.error };
   }
@@ -49,7 +53,7 @@ export async function recordSnapshot({ region = "eu", realm, name }) {
   const prev = await Snapshot.findOne({
     region,
     realmSlug,
-    name,
+    name: nm,
     date: { $lt: date },
   })
     .sort({ date: -1 })
@@ -72,7 +76,7 @@ export async function recordSnapshot({ region = "eu", realm, name }) {
   const doc = {
     region,
     realmSlug,
-    name,
+    name: nm,
     date,
     ilvl: profile.ilvl ?? null,
     mythicRating: profile.mythicPlus?.currentRating ?? null,
@@ -86,7 +90,7 @@ export async function recordSnapshot({ region = "eu", realm, name }) {
   };
 
   await Snapshot.updateOne(
-    { region, realmSlug, name, date },
+    { region, realmSlug, name: nm, date },
     { $set: doc },
     { upsert: true },
   );
@@ -143,10 +147,11 @@ function buildSchedule({ region, from, to }) {
 // GET /calendar — returns { progress:{snapshots}, charEvents, schedule }.
 export async function getCalendar({ region = "eu", realm, name, from, to }) {
   const realmSlug = slug(realm);
+  const nm = lname(name);
   const snaps = await Snapshot.find({
     region,
     realmSlug,
-    name,
+    name: nm,
     date: { $gte: from, $lte: to },
   })
     .sort({ date: 1 })
@@ -164,7 +169,7 @@ export async function getCalendar({ region = "eu", realm, name, from, to }) {
 
   // dated history events (achievements / M+ runs) backfilled from profile
   // timestamps. Derived from the stored snapshots' profiles, best-effort.
-  const charEvents = await buildCharEvents({ region, realmSlug, name, from, to });
+  const charEvents = await buildCharEvents({ region, realmSlug, name: nm, from, to });
 
   return {
     progress: { snapshots },
@@ -221,10 +226,11 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
 // GET /progress/:region/:realm/:name/day/:date — { played, events:[{type,label}] }
 export async function getDayDigest({ region = "eu", realm, name, date }) {
   const realmSlug = slug(realm);
+  const nm = lname(name);
 
   const [today, prev] = await Promise.all([
-    Snapshot.findOne({ region, realmSlug, name, date }).lean(),
-    Snapshot.findOne({ region, realmSlug, name, date: { $lt: date } })
+    Snapshot.findOne({ region, realmSlug, name: nm, date }).lean(),
+    Snapshot.findOne({ region, realmSlug, name: nm, date: { $lt: date } })
       .sort({ date: -1 })
       .lean(),
   ]);
