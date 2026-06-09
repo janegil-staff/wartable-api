@@ -192,13 +192,14 @@ function toMs(v) {
   const p = Date.parse(v);
   return Number.isNaN(p) ? null : p;
 }
-
 async function buildCharEvents({ region, realmSlug, name, from, to }) {
-  const fromMs = new Date(from + "T00:00:00Z").getTime();
-  const toMs2 = new Date(to + "T23:59:59Z").getTime();
-
+  // Pull the most recent snapshot in (or near) range; its profile carries
+  // historical timestamps (best M+ runs, last raid kills, achievements) that
+  // span many months — so we emit ALL of them and let the client filter by
+  // the displayed month. Clamping to from..to here is what hid past months.
   const latest = await Snapshot.findOne({
-    region, realmSlug, name, date: { $gte: from, $lte: to },
+    region, realmSlug, name,
+    ...(to ? { date: { $lte: to } } : {}),
   })
     .sort({ date: -1 })
     .select("profile")
@@ -208,12 +209,10 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
   if (!p) return [];
 
   const events = [];
-  const inRange = (ms) => ms != null && ms >= fromMs && ms <= toMs2;
 
-  // ── Mythic+ runs ── (profile: mythicPlus.bestRuns[] with completedAt)
   (p.mythicPlus?.bestRuns ?? []).forEach((run) => {
     const ms = toMs(run.completedAt);
-    if (!inRange(ms)) return;
+    if (ms == null) return;
     events.push({
       date: dayKey(new Date(ms)),
       kind: "mplusRun",
@@ -221,8 +220,6 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
     });
   });
 
-  // ── Raid boss kills ── (profile: raids[].modes[].bosses[] with lastKill)
-  // Dedupe identical boss+difficulty+day (a boss can appear across modes).
   const seenRaid = new Set();
   (p.raids ?? []).forEach((inst) => {
     (inst.modes ?? []).forEach((mode) => {
@@ -230,7 +227,7 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
       (mode.bosses ?? []).forEach((b) => {
         if (!b.killed) return;
         const ms = toMs(b.lastKill);
-        if (!inRange(ms)) return;
+        if (ms == null) return;
         const day = dayKey(new Date(ms));
         const key = `${b.name}|${diff}|${day}`;
         if (seenRaid.has(key)) return;
@@ -244,10 +241,9 @@ async function buildCharEvents({ region, realmSlug, name, from, to }) {
     });
   });
 
-  // ── Achievements ── (profile: achievementsList[] with completedAt)
   (p.achievementsList ?? []).forEach((a) => {
     const ms = toMs(a.completedAt);
-    if (!inRange(ms)) return;
+    if (ms == null) return;
     events.push({
       date: dayKey(new Date(ms)),
       kind: "achievement",
